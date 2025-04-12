@@ -6,31 +6,48 @@
 #include <sys/wait.h>
 #include <getopt.h>
 
-volatile sig_atomic_t token_recibido = 0;
-
+//volatile sig_atomic_t token_recibido = 0;
 volatile sig_atomic_t proceso_siguiente_recibido = 0;
-
-int token_actual = -1;
-
+//int token_actual = -1;
 pid_t proceso_siguiente = -1;
+int max_decrecimiento = 0;
 
-int num_random(int numero){
+/* int num_random(int numero){
     // num random entre 0 y numero - 1
     int num_random = rand() % numero;
     return num_random;
-}
+} */
 
-void ruleta(int numero){
+/* void ruleta(int numero){
     // por ahora todos tienen el mismo token y se ejecutan "al mismo tiempo" por lo que el token resultante debe ser el mismo
-    printf("; token resultante: %d \n", token_actual - num_random(10));
+    printf("; token resultante: %d \n", token_actual - num_random(numero));
     return;
-}
+} */
 
 void manejador_token(int sig, siginfo_t *si, void *context) {
-    int token = si->si_value.sival_int;     
-    printf("Proceso %d ; recibió el token: %d ", getpid(), token);
-    token_actual = token;
-    token_recibido = 1;
+    int token = si->si_value.sival_int;
+    
+    //calculo del decrecimiento
+    int decrecimiento = rand() % max_decrecimiento;
+    int nuevo_token = token - decrecimiento;
+
+    printf("Proceso %d ; Token recibido: %d ; lo disminuye en %d ; Token resultante: %d\n", getpid(), token, decrecimiento, nuevo_token);
+
+    if (nuevo_token < 0) {
+        exit(0);
+    }
+
+    if (proceso_siguiente > 0) {
+        union sigval value;
+        value.sival_int = nuevo_token;
+        usleep(100000);
+        if (sigqueue(proceso_siguiente, SIGUSR1, value) == -1) {
+            perror("sigqueue");
+        }
+    }
+
+    //token_actual = token;
+    //token_recibido = 1;
 
 }
 
@@ -38,10 +55,11 @@ void manejador_sig_proceso(int sig, siginfo_t *si, void *context){
     pid_t pid_proceso_sig = si->si_value.sival_int;
     // debug, comprobar si se forma el anillo
     // printf("el proceso siguiente del proceso %d es el %d\n", getpid(), pid_proceso_sig);
+    proceso_siguiente = pid_proceso_sig;
     proceso_siguiente_recibido = 1;
 }
 
-pid_t* crear_hijos(int cantidad, int token, sigset_t *oldmask, int numero) {
+pid_t* crear_hijos(int cantidad,  sigset_t *oldmask, int numero) {
     pid_t *pids = malloc(cantidad * sizeof(pid_t));
     if (!pids) {
         perror("malloc");
@@ -55,11 +73,13 @@ pid_t* crear_hijos(int cantidad, int token, sigset_t *oldmask, int numero) {
             exit(EXIT_FAILURE);
         } else if (pid == 0) {
             // Hijo
-            while(proceso_siguiente_recibido == 0 || token_recibido == 0){
+            srand(getpid());
+            while(proceso_siguiente_recibido == 0){
                 sigsuspend(oldmask);
             }
-            ruleta(numero);
-            exit(0);
+            while(1) {
+                sigsuspend(oldmask);
+            }
         } else {
             // Padre guarda el PID
             pids[i] = pid;
@@ -76,9 +96,15 @@ int main(int argc, char *argv[]) {
 
     while ((opt = getopt(argc, argv, "t:M:p:")) != -1) {
         switch (opt) {
-            case 't': token = atoi(optarg); break;
-            case 'M': numero = atoi(optarg); break;
-            case 'p': hijos = atoi(optarg); break;
+            case 't':
+                token = atoi(optarg);
+                break;
+            case 'M':
+                numero = atoi(optarg);
+                break;
+            case 'p':
+                hijos = atoi(optarg);
+                break;
             default:
                 fprintf(stderr, "Uso: %s -t <num> -M <num> -p <num>\n", argv[0]);
                 exit(EXIT_FAILURE);
@@ -91,6 +117,8 @@ int main(int argc, char *argv[]) {
     }
 
     printf("Valores ingresados: t = %d, M = %d, p = %d\n", token, numero, hijos);
+
+    max_decrecimiento = numero;
 
     struct sigaction sa;
     sigset_t mask, oldmask;
@@ -123,15 +151,13 @@ int main(int argc, char *argv[]) {
 
 
     //Llamamos a la función para crear los hijos
-    pid_t *pids = crear_hijos(hijos, token, &oldmask, numero);
+    pid_t *pids = crear_hijos(hijos, &oldmask, numero);
 
-    //El padre les envía el token
+    // Enviar token solo al primer proceso
     union sigval value;
     value.sival_int = token;
-    for (int i = 0; i < hijos; i++) {
-        if (sigqueue(pids[i], SIGUSR1, value) == -1) {
-            perror("sigqueue");
-        }
+    if (sigqueue(pids[0], SIGUSR1, value) == -1) {
+        perror("sigqueue");
     }
 
     //El padre conecta los procesos
