@@ -24,39 +24,68 @@ int max_decrecimiento = 0;
     return;
 } */
 
-void manejador_token(int sig, siginfo_t *si, void *context) {
-    int token = si->si_value.sival_int;
-    
-    //calculo del decrecimiento
-    int decrecimiento = rand() % max_decrecimiento;
-    int nuevo_token = token - decrecimiento;
+void manejador_SIGUSR1(int sig, siginfo_t *si, void *context) {
+    int valor_señal = si->si_value.sival_int;
+    int manejador = (valor_señal)%10;
+    if(manejador == 1){ // Manejador token
 
-    printf("Proceso %d ; Token recibido: %d ; lo disminuye en %d ; Token resultante: %d\n", getpid(), token, decrecimiento, nuevo_token);
+        int token = (valor_señal)/10;
+        
+        //calculo del decrecimiento
+        int decrecimiento = rand() % max_decrecimiento;
+        int nuevo_token = token - decrecimiento;
 
-    if (nuevo_token < 0) {
-        exit(0);
+        printf("Proceso %d ; Token recibido: %d ; lo disminuye en %d ; Token resultante: %d\n", getpid(), token, decrecimiento, nuevo_token);
+
+        if (nuevo_token < 0) {
+            printf("(Proceso %d eliminado)\n", getpid());
+            exit(0);
+        }
+
+        if (proceso_siguiente > 0) {
+            union sigval value;
+            value.sival_int = (nuevo_token*10) + 1;
+            // ?
+            // usleep(100000);
+            if (sigqueue(proceso_siguiente, SIGUSR1, value) == -1) {
+                perror("sigqueue");
+            }
+        }
+
+        //token_actual = token;
+        //token_recibido = 1;
     }
+    else{ // Manejador notificacion
+        int procesos_restantes = (valor_señal)/10;
+        if(procesos_restantes == 1){
+            printf("Ganador: Proceso %d\n", getpid());
+            exit(0);
+        }
+        else{
 
-    if (proceso_siguiente > 0) {
+        }
+    }
+}
+
+void manejador_SIGUSR2(int sig, siginfo_t *si, void *context){
+    int valor_señal = si->si_value.sival_int;
+    int manejador = valor_señal%10;
+    printf("manejador = %d\n", manejador);
+    if(manejador == 1){ // Manejador siguiente proceso
+        pid_t pid_proceso_sig = (valor_señal)/10;
+        // debug, comprobar si se forma el anillo
+        // printf("el proceso siguiente del proceso %d es el %d\n", getpid(), pid_proceso_sig);
+        proceso_siguiente = pid_proceso_sig;
+        proceso_siguiente_recibido = 1;
+    }
+    else{ // Manejador notificacion lider
+        int token_reiniciado = (valor_señal)/10;
         union sigval value;
-        value.sival_int = nuevo_token;
-        usleep(100000);
+        value.sival_int = (token_reiniciado*10) + 1;
         if (sigqueue(proceso_siguiente, SIGUSR1, value) == -1) {
             perror("sigqueue");
         }
     }
-
-    //token_actual = token;
-    //token_recibido = 1;
-
-}
-
-void manejador_sig_proceso(int sig, siginfo_t *si, void *context){
-    pid_t pid_proceso_sig = si->si_value.sival_int;
-    // debug, comprobar si se forma el anillo
-    // printf("el proceso siguiente del proceso %d es el %d\n", getpid(), pid_proceso_sig);
-    proceso_siguiente = pid_proceso_sig;
-    proceso_siguiente_recibido = 1;
 }
 
 pid_t* crear_hijos(int cantidad,  sigset_t *oldmask, int numero) {
@@ -125,7 +154,7 @@ int main(int argc, char *argv[]) {
 
     //Configuracion del manejador para SIGUSR1
     sa.sa_flags = SA_SIGINFO; //Permite aceder a la informacion extendida
-    sa.sa_sigaction = manejador_token; //Asigna el manejadro definido
+    sa.sa_sigaction = manejador_SIGUSR1; //Asigna el manejadro definido
     sigemptyset(&sa.sa_mask);
     if (sigaction(SIGUSR1, &sa, NULL) == -1) {
         perror("sigaction");
@@ -133,7 +162,7 @@ int main(int argc, char *argv[]) {
     }
 
     //Configuracion del manejador para SIGUSR2
-    sa.sa_sigaction = manejador_sig_proceso; //Asigna el manejadro definido
+    sa.sa_sigaction = manejador_SIGUSR2; //Asigna el manejadro definido
     sigemptyset(&sa.sa_mask);
     if (sigaction(SIGUSR2, &sa, NULL) == -1) {
         perror("sigaction");
@@ -155,7 +184,7 @@ int main(int argc, char *argv[]) {
 
     // Enviar token solo al primer proceso
     union sigval value;
-    value.sival_int = token;
+    value.sival_int = (token*10) + 1;
     if (sigqueue(pids[0], SIGUSR1, value) == -1) {
         perror("sigqueue");
     }
@@ -164,13 +193,13 @@ int main(int argc, char *argv[]) {
     union sigval value2;
     for (int i = 0; i < hijos; i++) {
         if(i == (hijos-1)){
-            value2.sival_int = pids[0];
+            value2.sival_int = (pids[0]*10) + 1;
             if (sigqueue(pids[i], SIGUSR2, value2) == -1) {
                 perror("sigqueue");
             }
         }
         else{
-            value2.sival_int = pids[i+1];
+            value2.sival_int = (pids[i+1]*10) + 1;
             if (sigqueue(pids[i], SIGUSR2, value2) == -1) {
                 perror("sigqueue");
             }
@@ -178,11 +207,74 @@ int main(int argc, char *argv[]) {
         
     }
 
-    // Espera que terminen
+    /* // Espera que terminen
     for (int i = 0; i < hijos; i++) {
         waitpid(pids[i], NULL, 0);
-    }
+    }*/
 
+    while(hijos > 1){
+        pid_t pid_hijo_terminado = wait(NULL);
+        // cuando uno de los procesos termina se desconecta del "anillo" de procesos
+        for (int j = 0; j < hijos; j++) {
+            if(pids[j] == pid_hijo_terminado){
+                if(j == (hijos-1)){
+                    value2.sival_int = (pids[0]*10) + 1;
+                    if (sigqueue(pids[j-1], SIGUSR2, value2) == -1){
+                        perror("sigqueue");
+                    }
+                }
+                else if(j == 0){
+                    value2.sival_int = (pids[j+1]*10) + 1;
+                    if (sigqueue(pids[hijos-1], SIGUSR2, value2) == -1){
+                        perror("sigqueue");
+                    }
+                }
+                else{
+                    value2.sival_int = (pids[j+1]*10) + 1;
+                    if (sigqueue(pids[j-1], SIGUSR2, value2) == -1){
+                        perror("sigqueue");
+                    }
+                }
+                j = hijos;
+            }            
+        }
+
+        // Se elimina el pid del proceso eliminado del arreglo de pids 
+        pid_t *pids_mod = malloc((hijos-1)*sizeof(pid_t));
+        if (!pids_mod) {
+            perror("malloc");
+            exit(EXIT_FAILURE);
+        }
+        int k = 0;
+        for(int i = 0; i < hijos; i++){
+            if(pid_hijo_terminado != pids[i]){
+                pids_mod[k] = pids[i];
+                k++;
+            }
+        }
+        free(pids);
+        pids = pids_mod;
+        hijos--;
+
+        /* da problemas
+        // Se notifica a los procesos que se elimino un proceso y se le envia la cantidad de procesos restantes
+        value.sival_int = (hijos*10);
+        for(int i = 0; i < hijos; i++){
+            if(sigqueue(pids[i], SIGUSR1, value) == -1){
+                perror("sigqueue");
+            }
+        }
+            */
+
+        // Por ahora se elije al proceso que esta al principio del arreglo como el lider para reiniciar el desafio
+        value2.sival_int = (token*10) + 1;
+        // Deberia se SIGUSR2 pero da problemas
+        if(sigqueue(pids[0], SIGUSR1, value2) == -1){
+            perror("sigqueue");
+        }
+        printf("restantes = %d\n", hijos);
+    }
+    wait(NULL);
     free(pids);
     return 0;
 }
