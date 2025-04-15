@@ -45,8 +45,10 @@ void manejador_SIGUSR1(int sig, siginfo_t *si, void *context) {
         if (proceso_siguiente > 0) {
             union sigval value;
             value.sival_int = (nuevo_token*10) + 1;
-            // ?
-            // usleep(100000);
+            /*En teoria el usleep evita enviar señales muy rapido y evitar que el porgrama
+            quede colgado ( me pasaba que se quedaba pegada la terminal y esto que me lo agrego el copilot
+            me emppezo a dejar de pasar, no se si habra sido coincidencia)*/
+            //usleep(100000);
             if (sigqueue(proceso_siguiente, SIGUSR1, value) == -1) {
                 perror("sigqueue");
             }
@@ -58,11 +60,8 @@ void manejador_SIGUSR1(int sig, siginfo_t *si, void *context) {
     else{ // Manejador notificacion
         int procesos_restantes = (valor_señal)/10;
         if(procesos_restantes == 1){
-            printf("Ganador: Proceso %d\n", getpid());
+            printf("Proceso %d es el ganador\n", getpid());
             exit(0);
-        }
-        else{
-
         }
     }
 }
@@ -235,7 +234,7 @@ int main(int argc, char *argv[]) {
                         perror("sigqueue");
                     }
                 }
-                j = hijos;
+                break;
             }            
         }
 
@@ -267,10 +266,23 @@ int main(int argc, char *argv[]) {
             */
 
         // Por ahora se elije al proceso que esta al principio del arreglo como el lider para reiniciar el desafio
-        value2.sival_int = (token*10) + 1;
+        /* value2.sival_int = (token*10) + 1;
         // Deberia se SIGUSR2 pero da problemas
         if(sigqueue(pids[0], SIGUSR1, value2) == -1){
             perror("sigqueue");
+        } */
+        // Si solo queda un proceso, notificamos al ganador
+        if (hijos == 1) {
+            value2.sival_int = (hijos * 10);
+            if (sigqueue(pids[0], SIGUSR1, value2) == -1) {
+                perror("sigqueue");
+            }
+        }
+        else {
+            value2.sival_int = (token * 10) + 1;
+            if (sigqueue(pids[0], SIGUSR1, value2) == -1) {
+                perror("sigqueue");
+            }
         }
         printf("restantes = %d\n", hijos);
     }
