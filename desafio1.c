@@ -58,6 +58,9 @@ void manejador_SIGUSR1(int sig, siginfo_t *si, void *context) {
         //token_actual = token;
         //token_recibido = 1;
     }
+    else if(manejador == 2){ // Manejador notificacion cambio de proceso siguiente cuando muere un proceso
+        proceso_siguiente_recibido++;
+    }
     else{ // Manejador notificacion
         int procesos_restantes = (valor_señal)/10;
         if(procesos_restantes == 1){
@@ -77,6 +80,15 @@ void manejador_SIGUSR2(int sig, siginfo_t *si, void *context){
         // printf("el proceso siguiente del proceso %d es el %d\n", getpid(), pid_proceso_sig);
         proceso_siguiente = pid_proceso_sig;
         proceso_siguiente_recibido = 1;
+    }
+    else if(manejador == 2){
+        pid_t pid_proceso_sig = (valor_señal)/10;
+        proceso_siguiente = pid_proceso_sig;
+        union sigval value;
+        value.sival_int = 12;
+        if (sigqueue(getppid(), SIGUSR1, value) == -1) {
+            perror("sigqueue");
+        }
     }
     else{ // Manejador notificacion lider
         int token_reiniciado = (valor_señal)/10;
@@ -219,19 +231,19 @@ int main(int argc, char *argv[]) {
         for (int j = 0; j < hijos; j++) {
             if(pids[j] == pid_hijo_terminado){
                 if(j == (hijos-1)){
-                    value2.sival_int = (pids[0]*10) + 1;
+                    value2.sival_int = (pids[0]*10) + 2;
                     if (sigqueue(pids[j-1], SIGUSR2, value2) == -1){
                         perror("sigqueue");
                     }
                 }
                 else if(j == 0){
-                    value2.sival_int = (pids[j+1]*10) + 1;
+                    value2.sival_int = (pids[j+1]*10) + 2;
                     if (sigqueue(pids[hijos-1], SIGUSR2, value2) == -1){
                         perror("sigqueue");
                     }
                 }
                 else{
-                    value2.sival_int = (pids[j+1]*10) + 1;
+                    value2.sival_int = (pids[j+1]*10) + 2;
                     if (sigqueue(pids[j-1], SIGUSR2, value2) == -1){
                         perror("sigqueue");
                     }
@@ -239,6 +251,9 @@ int main(int argc, char *argv[]) {
                 break;
             }            
         }
+
+        // el padre espera que efectivamente el hijo tenga el cambio del siguiente proceso
+        sigsuspend(&oldmask);
 
         // Se elimina el pid del proceso eliminado del arreglo de pids 
         pid_t *pids_mod = malloc((hijos-1)*sizeof(pid_t));
@@ -256,7 +271,7 @@ int main(int argc, char *argv[]) {
         free(pids);
         pids = pids_mod;
         hijos--;
-
+        
         /* da problemas
         // Se notifica a los procesos que se elimino un proceso y se le envia la cantidad de procesos restantes
         value.sival_int = (hijos*10);
@@ -274,17 +289,16 @@ int main(int argc, char *argv[]) {
             perror("sigqueue");
         } */
         // Si solo queda un proceso, notificamos al ganador
-        if (hijos == 1) {
-            value2.sival_int = (hijos * 10);
-            if (sigqueue(pids[0], SIGUSR1, value2) == -1) {
-                perror("sigqueue");
-            }
+
+        // Se supone que por el enunciado debemos "avisarle" a todos los hijos que se murio alguno
+        value.sival_int = (hijos * 10);
+        if (sigqueue(pids[0], SIGUSR1, value) == -1) {
+           perror("sigqueue");
         }
-        else {
-            value2.sival_int = (token * 10) + 1;
-            if (sigqueue(pids[0], SIGUSR1, value2) == -1) {
-                perror("sigqueue");
-            }
+
+        value2.sival_int = (token * 10);
+        if (sigqueue(pids[0], SIGUSR2, value2) == -1) {
+            perror("sigqueue");
         }
         //printf("restantes = %d\n", hijos);
     }
