@@ -13,18 +13,12 @@ pid_t proceso_siguiente = -1;
 int max_decrecimiento = 0;
 int numero_hijo = -1;
 
-/* int num_random(int numero){
-    // num random entre 0 y numero - 1
-    int num_random = rand() % numero;
-    return num_random;
-} */
-
-/* void ruleta(int numero){
-    // por ahora todos tienen el mismo token y se ejecutan "al mismo tiempo" por lo que el token resultante debe ser el mismo
-    printf("; token resultante: %d \n", token_actual - num_random(numero));
-    return;
-} */
-
+//Entradas:    Señal recibida (SIGUSR1), valor de la señal, informacion del proceso de la señal
+//Salida:      No retorna nada
+//Descripcion: Maneja la señal SIGUSR1, recibe el token y lo decrece en un valor aleatorio entre 0 y M 
+//             y lo envia al siguiente proceso, si el token es menor a 0, el proceso se elimina.
+//             Si el manejador es 2, significa que se recibe la señal de un proceso que ha muerto y se debe cambiar el siguiente proceso
+//             Si el manejador es distinto e 1 y 2 significa que se recibe la señal de un proceso que ha ganado
 void manejador_SIGUSR1(int sig, siginfo_t *si, void *context) {
     int valor_señal = si->si_value.sival_int;
     int manejador = (valor_señal)%10;
@@ -46,10 +40,6 @@ void manejador_SIGUSR1(int sig, siginfo_t *si, void *context) {
         if (proceso_siguiente > 0) {
             union sigval value;
             value.sival_int = (nuevo_token*10) + 1;
-            /*En teoria el usleep evita enviar señales muy rapido y evitar que el porgrama
-            quede colgado ( me pasaba que se quedaba pegada la terminal y esto que me lo agrego el copilot
-            me emppezo a dejar de pasar, no se si habra sido coincidencia)*/
-            //usleep(100000);
             if (sigqueue(proceso_siguiente, SIGUSR1, value) == -1) {
                 perror("sigqueue");
             }
@@ -70,6 +60,10 @@ void manejador_SIGUSR1(int sig, siginfo_t *si, void *context) {
     }
 }
 
+//Entradas:    Señal recibida (SIGUSR2), valor de la señal, informacion del proceso de la señal
+//Salidas:     No retorna nada
+//Descripcion: Maneja la señal SIGUSR2, actualiza la referencia del siguiente proceso
+//             Tambien maneja el cambio de lider de procesos
 void manejador_SIGUSR2(int sig, siginfo_t *si, void *context){
     int valor_señal = si->si_value.sival_int;
     int manejador = valor_señal%10;
@@ -100,6 +94,9 @@ void manejador_SIGUSR2(int sig, siginfo_t *si, void *context){
     }
 }
 
+//Entradas:    Cantidad de hijos a crear, mascara de señales, numero de procesos
+//Salidas:     Retorna un puntero a un arreglo de pids de los hijos creados
+//Descripcion: Crea los procesos hijos, cada uno espera las señales para operar
 pid_t* crear_hijos(int cantidad,  sigset_t *oldmask, int numero) {
     pid_t *pids = malloc(cantidad * sizeof(pid_t));
     if (!pids) {
@@ -128,6 +125,120 @@ pid_t* crear_hijos(int cantidad,  sigset_t *oldmask, int numero) {
         }
     }
     return pids;
+}
+
+//Entradas:    Pids de los hijos, cantidad de hijos, token inicial, mascara de señales, valor de la señal, valor de la señal 2
+//Salidas:     No retorna nada
+//Descripcion: Maneja el ciclo de vida de los hijos. Modifica los procesos y actualiza el arreglo de PIDs
+void manejar_hijos(pid_t *pids, int *hijos, int token, sigset_t *oldmask, union sigval value, union sigval value2){
+    while(*hijos > 1){
+        pid_t pid_hijo_terminado = wait(NULL);
+        // cuando uno de los procesos termina se desconecta del "anillo" de procesos
+        for (int j = 0; j < *hijos; j++) {
+            if(pids[j] == pid_hijo_terminado){
+                if(j == (*hijos-1)){
+                    value2.sival_int = (pids[0]*10) + 2;
+                    if (sigqueue(pids[j-1], SIGUSR2, value2) == -1){
+                        perror("sigqueue");
+                    }
+                }
+                else if(j == 0){
+                    value2.sival_int = (pids[j+1]*10) + 2;
+                    if (sigqueue(pids[*hijos-1], SIGUSR2, value2) == -1){
+                        perror("sigqueue");
+                    }
+                }
+                else{
+                    value2.sival_int = (pids[j+1]*10) + 2;
+                    if (sigqueue(pids[j-1], SIGUSR2, value2) == -1){
+                        perror("sigqueue");
+                    }
+                }
+                break;
+            }            
+        }
+
+        // el padre espera que efectivamente el hijo tenga el cambio del siguiente proceso
+        sigsuspend(oldmask);
+
+        // Se elimina el pid del proceso eliminado del arreglo de pids 
+        pid_t *pids_mod = malloc((*hijos-1)*sizeof(pid_t));
+        if (!pids_mod) {
+            perror("malloc");
+            exit(EXIT_FAILURE);
+        }
+        int k = 0;
+        for(int i = 0; i < *hijos; i++){
+            if(pid_hijo_terminado != pids[i]){
+                pids_mod[k] = pids[i];
+                k++;
+            }
+        }
+        //free(pids);
+        pids = pids_mod;
+        (*hijos)--;
+        
+        /* da problemas
+        // Se notifica a los procesos que se elimino un proceso y se le envia la cantidad de procesos restantes
+        value.sival_int = (hijos*10);
+        for(int i = 0; i < hijos; i++){
+            if(sigqueue(pids[i], SIGUSR1, value) == -1){
+                perror("sigqueue");
+            }
+        }
+            */
+
+        // Por ahora se elije al proceso que esta al principio del arreglo como el lider para reiniciar el desafio
+        /* value2.sival_int = (token*10) + 1;
+        // Deberia se SIGUSR2 pero da problemas
+        if(sigqueue(pids[0], SIGUSR1, value2) == -1){
+            perror("sigqueue");
+        } */
+        // Si solo queda un proceso, notificamos al ganador
+
+        // Se supone que por el enunciado debemos "avisarle" a todos los hijos que se murio alguno
+        value.sival_int = (*hijos * 10);
+        if (sigqueue(pids[0], SIGUSR1, value) == -1) {
+           perror("sigqueue");
+        }
+
+        value2.sival_int = (token * 10);
+        if (sigqueue(pids[0], SIGUSR2, value2) == -1) {
+            perror("sigqueue");
+        }
+        //printf("restantes = %d\n", hijos);
+    }
+}
+
+//Entradas:    Pids de los hijos, token inicial, valor de la señal
+//Salidas:     No retorna nada
+//Descripcion: Envia el token inicial al primer hijo
+void enviar_token(pid_t *pids, int token, union sigval value){
+    value.sival_int = (token*10) + 1;
+    if (sigqueue(pids[0], SIGUSR1, value) == -1) {
+        perror("sigqueue");
+    }
+}
+
+//Entradas:    Pids de los hijos, cantidad de hijos, valor de la señal
+//Salidas:     No retorna nada
+//Descripcion: Conecta los hijos entre si, enviando la señal SIGUSR2
+void conectar_hijos(pid_t *pids, int hijos, union sigval value){
+    for (int i = 0; i < hijos; i++) {
+        if(i == (hijos-1)){
+            value.sival_int = (pids[0]*10) + 1;
+            if (sigqueue(pids[i], SIGUSR2, value) == -1) {
+                perror("sigqueue");
+            }
+        }
+        else{
+            value.sival_int = (pids[i+1]*10) + 1;
+            if (sigqueue(pids[i], SIGUSR2, value) == -1) {
+                perror("sigqueue");
+            }
+        }
+        
+    }
 }
 
 
@@ -213,16 +324,23 @@ int main(int argc, char *argv[]) {
     //Llamamos a la función para crear los hijos
     pid_t *pids = crear_hijos(hijos, &oldmask, numero);
 
-    // Enviar token solo al primer proceso
     union sigval value;
+    union sigval value2;
+
+
+    // Enviar token solo al primer proceso
+    enviar_token(pids, token, value);
+
+    /* union sigval value;
     value.sival_int = (token*10) + 1;
     if (sigqueue(pids[0], SIGUSR1, value) == -1) {
         perror("sigqueue");
-    }
+    } */
 
     //El padre conecta los procesos
-    union sigval value2;
-    for (int i = 0; i < hijos; i++) {
+    conectar_hijos(pids, hijos, value2);
+
+    /* for (int i = 0; i < hijos; i++) {
         if(i == (hijos-1)){
             value2.sival_int = (pids[0]*10) + 1;
             if (sigqueue(pids[i], SIGUSR2, value2) == -1) {
@@ -236,90 +354,17 @@ int main(int argc, char *argv[]) {
             }
         }
         
-    }
+    } */
+
+
+    manejar_hijos(pids, &hijos, token, &oldmask, value, value2);
 
     /* // Espera que terminen
     for (int i = 0; i < hijos; i++) {
         waitpid(pids[i], NULL, 0);
     }*/
 
-    while(hijos > 1){
-        pid_t pid_hijo_terminado = wait(NULL);
-        // cuando uno de los procesos termina se desconecta del "anillo" de procesos
-        for (int j = 0; j < hijos; j++) {
-            if(pids[j] == pid_hijo_terminado){
-                if(j == (hijos-1)){
-                    value2.sival_int = (pids[0]*10) + 2;
-                    if (sigqueue(pids[j-1], SIGUSR2, value2) == -1){
-                        perror("sigqueue");
-                    }
-                }
-                else if(j == 0){
-                    value2.sival_int = (pids[j+1]*10) + 2;
-                    if (sigqueue(pids[hijos-1], SIGUSR2, value2) == -1){
-                        perror("sigqueue");
-                    }
-                }
-                else{
-                    value2.sival_int = (pids[j+1]*10) + 2;
-                    if (sigqueue(pids[j-1], SIGUSR2, value2) == -1){
-                        perror("sigqueue");
-                    }
-                }
-                break;
-            }            
-        }
-
-        // el padre espera que efectivamente el hijo tenga el cambio del siguiente proceso
-        sigsuspend(&oldmask);
-
-        // Se elimina el pid del proceso eliminado del arreglo de pids 
-        pid_t *pids_mod = malloc((hijos-1)*sizeof(pid_t));
-        if (!pids_mod) {
-            perror("malloc");
-            exit(EXIT_FAILURE);
-        }
-        int k = 0;
-        for(int i = 0; i < hijos; i++){
-            if(pid_hijo_terminado != pids[i]){
-                pids_mod[k] = pids[i];
-                k++;
-            }
-        }
-        free(pids);
-        pids = pids_mod;
-        hijos--;
-        
-        /* da problemas
-        // Se notifica a los procesos que se elimino un proceso y se le envia la cantidad de procesos restantes
-        value.sival_int = (hijos*10);
-        for(int i = 0; i < hijos; i++){
-            if(sigqueue(pids[i], SIGUSR1, value) == -1){
-                perror("sigqueue");
-            }
-        }
-            */
-
-        // Por ahora se elije al proceso que esta al principio del arreglo como el lider para reiniciar el desafio
-        /* value2.sival_int = (token*10) + 1;
-        // Deberia se SIGUSR2 pero da problemas
-        if(sigqueue(pids[0], SIGUSR1, value2) == -1){
-            perror("sigqueue");
-        } */
-        // Si solo queda un proceso, notificamos al ganador
-
-        // Se supone que por el enunciado debemos "avisarle" a todos los hijos que se murio alguno
-        value.sival_int = (hijos * 10);
-        if (sigqueue(pids[0], SIGUSR1, value) == -1) {
-           perror("sigqueue");
-        }
-
-        value2.sival_int = (token * 10);
-        if (sigqueue(pids[0], SIGUSR2, value2) == -1) {
-            perror("sigqueue");
-        }
-        //printf("restantes = %d\n", hijos);
-    }
+    
     wait(NULL);
     free(pids);
     return 0;
