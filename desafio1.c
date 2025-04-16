@@ -11,6 +11,7 @@ volatile sig_atomic_t proceso_siguiente_recibido = 0;
 //int token_actual = -1;
 pid_t proceso_siguiente = -1;
 int max_decrecimiento = 0;
+int numero_hijo = -1;
 
 /* int num_random(int numero){
     // num random entre 0 y numero - 1
@@ -35,10 +36,10 @@ void manejador_SIGUSR1(int sig, siginfo_t *si, void *context) {
         int decrecimiento = rand() % max_decrecimiento;
         int nuevo_token = token - decrecimiento;
 
-        printf("Proceso %d ; Token recibido: %d ; lo disminuye en %d ; Token resultante: %d\n", getpid(), token, decrecimiento, nuevo_token);
+        printf("Proceso %d ; Token recibido: %d ; lo disminuye en %d ; Token resultante: %d\n", numero_hijo, token, decrecimiento, nuevo_token);
 
         if (nuevo_token < 0) {
-            printf("(Proceso %d eliminado)\n", getpid());
+            printf("(Proceso %d eliminado)\n", numero_hijo);
             exit(0);
         }
 
@@ -60,7 +61,7 @@ void manejador_SIGUSR1(int sig, siginfo_t *si, void *context) {
     else{ // Manejador notificacion
         int procesos_restantes = (valor_señal)/10;
         if(procesos_restantes == 1){
-            printf("Proceso %d es el ganador\n", getpid());
+            printf("Proceso %d es el ganador\n", numero_hijo);
             exit(0);
         }
     }
@@ -69,7 +70,7 @@ void manejador_SIGUSR1(int sig, siginfo_t *si, void *context) {
 void manejador_SIGUSR2(int sig, siginfo_t *si, void *context){
     int valor_señal = si->si_value.sival_int;
     int manejador = valor_señal%10;
-    printf("manejador = %d\n", manejador);
+    //printf("manejador = %d\n", manejador);
     if(manejador == 1){ // Manejador siguiente proceso
         pid_t pid_proceso_sig = (valor_señal)/10;
         // debug, comprobar si se forma el anillo
@@ -101,6 +102,7 @@ pid_t* crear_hijos(int cantidad,  sigset_t *oldmask, int numero) {
             exit(EXIT_FAILURE);
         } else if (pid == 0) {
             // Hijo
+            numero_hijo = i + 1;
             srand(getpid());
             while(proceso_siguiente_recibido == 0){
                 sigsuspend(oldmask);
@@ -144,7 +146,7 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    printf("Valores ingresados: t = %d, M = %d, p = %d\n", token, numero, hijos);
+    //printf("Valores ingresados: t = %d, M = %d, p = %d\n", token, numero, hijos);
 
     max_decrecimiento = numero;
 
@@ -284,7 +286,7 @@ int main(int argc, char *argv[]) {
                 perror("sigqueue");
             }
         }
-        printf("restantes = %d\n", hijos);
+        //printf("restantes = %d\n", hijos);
     }
     wait(NULL);
     free(pids);
