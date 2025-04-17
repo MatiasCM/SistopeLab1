@@ -6,9 +6,6 @@
 #include <sys/wait.h>
 #include <getopt.h>
 
-//volatile sig_atomic_t token_recibido = 0;
-volatile sig_atomic_t proceso_siguiente_recibido = 0;
-//int token_actual = -1;
 pid_t proceso_siguiente = -1;
 int max_decrecimiento = 0;
 int numero_hijo = -1;
