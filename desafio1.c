@@ -34,11 +34,11 @@ int numero_hijo = -1;
 //              al padre que recibio la señal.
 
 void manejador_SIGUSR1(int sig, siginfo_t *si, void *context){
-    int valor_señal = si->si_value.sival_int;
-    int manejador = (valor_señal)%10;
+    int valor_senial = si->si_value.sival_int;
+    int manejador = (valor_senial)%10;
     if(manejador == 1){ // Manejador token
 
-        int token = (valor_señal)/10;
+        int token = (valor_senial)/10;
         
         //calculo del decrecimiento
         int decrecimiento = rand() % max_decrecimiento;
@@ -64,7 +64,7 @@ void manejador_SIGUSR1(int sig, siginfo_t *si, void *context){
         // o el aviso de que un proceso termino
     }
     else{ // Manejador notificacion
-        int procesos_restantes = (valor_señal)/10;
+        int procesos_restantes = (valor_senial)/10;
         if(procesos_restantes == 1){
             printf("Proceso %d es el ganador\n", numero_hijo);
             exit(0);
@@ -99,15 +99,15 @@ void manejador_SIGUSR1(int sig, siginfo_t *si, void *context){
 //              lider y el valor recibido es para que reinicie el token y continue el desafio.
 
 void manejador_SIGUSR2(int sig, siginfo_t *si, void *context){
-    int valor_señal = si->si_value.sival_int;
-    int manejador = valor_señal%10;
+    int valor_senial = si->si_value.sival_int;
+    int manejador = valor_senial%10;
     
     if(manejador == 1){ // Manejador siguiente proceso
-        pid_t pid_proceso_sig = (valor_señal)/10;
+        pid_t pid_proceso_sig = (valor_senial)/10;
         proceso_siguiente = pid_proceso_sig;
     }
     else if(manejador == 2){
-        pid_t pid_proceso_sig = (valor_señal)/10;
+        pid_t pid_proceso_sig = (valor_senial)/10;
         proceso_siguiente = pid_proceso_sig;
 
         union sigval value;
@@ -117,7 +117,7 @@ void manejador_SIGUSR2(int sig, siginfo_t *si, void *context){
         }
     }
     else{ // Manejador notificacion lider
-        int token_reiniciado = (valor_señal)/10;
+        int token_reiniciado = (valor_senial)/10;
         union sigval value;
         value.sival_int = (token_reiniciado*10) + 1;
         if (sigqueue(proceso_siguiente, SIGUSR1, value) == -1) {
