@@ -13,13 +13,30 @@ pid_t proceso_siguiente = -1;
 int max_decrecimiento = 0;
 int numero_hijo = -1;
 
-//Entradas:    Señal recibida (SIGUSR1), valor de la señal, informacion del proceso de la señal
-//Salida:      No retorna nada
-//Descripcion: Maneja la señal SIGUSR1, recibe el token y lo decrece en un valor aleatorio entre 0 y M 
-//             y lo envia al siguiente proceso, si el token es menor a 0, el proceso se elimina.
-//             Si el manejador es 2, significa que se recibe la señal de un proceso que ha muerto y se debe cambiar el siguiente proceso
-//             Si el manejador es distinto e 1 y 2 significa que se recibe la señal de un proceso que ha ganado
-void manejador_SIGUSR1(int sig, siginfo_t *si, void *context) {
+// Entradas:    Señal recibida (sig) en este caso debe recibir SIGUSR1, (*si) puntero a la estructura que contiene 
+//              la informacion de la señal (en este caso se usa para enviar valores a traves de las señales) y (*context) 
+//              informacion del proceso de la señal (en este caso no se usa)
+//
+// Salida:      No retorna nada
+//
+// Descripcion: Maneja la señal SIGUSR1, recibe un valor de la señal a traves del campo si_value de si, este valor es 
+//              interpretado como un entero con sival_int, este debe tener la forma (valor + manejador) de modo que el 
+//              numero menos significativo es el "manejador" que se usara y los demas es el valor que se usara 
+//              (ej: 9872, el manejador es el 2 y el valor es 987).
+//
+//              Si el manejador es 1, el valor que recibe es el token y lo decrece en un valor aleatorio entre 0 y M 
+//              y lo envia al siguiente proceso, si el token es menor a 0, el proceso se elimina.
+// 
+//              Si el manejador es 2, significa que la señal recibida es de un proceso que cambio su proceso siguiente,
+//              esta señal la recibe el proceso padre como aviso para poder continuar su ejecucion luego de que le dijo a 
+//              uno de sus hijos que cambiara su proceso siguiente luego de que alguno de los procesos hijos finalizara.
+//              O tambien significa que el hijo confirma que recibio la señal de que un proceso termino.
+//
+//              Si el manejador es distinto e 1 y 2 significa que el valor recibido es el numero de procesos aun activos
+//              "jugando", si el valor recibido es 1, el proceso se declara el ganador y termina su ejecucion, si no, avisa
+//              al padre que recibio la señal.
+
+void manejador_SIGUSR1(int sig, siginfo_t *si, void *context){
     int valor_señal = si->si_value.sival_int;
     int manejador = (valor_señal)%10;
     if(manejador == 1){ // Manejador token
@@ -44,12 +61,10 @@ void manejador_SIGUSR1(int sig, siginfo_t *si, void *context) {
                 perror("sigqueue");
             }
         }
-
-        //token_actual = token;
-        //token_recibido = 1;
     }
-    else if(manejador == 2){ // Manejador notificacion cambio de proceso siguiente cuando muere un proceso
-        proceso_siguiente_recibido++;
+    else if(manejador == 2){ // Manejador notificacion padre
+        // Simplemente una notificacion al padre de que los hijos recibieron la señal para cambiar el proceso siguiente
+        // o el aviso de que un proceso termino
     }
     else{ // Manejador notificacion
         int procesos_restantes = (valor_señal)/10;
@@ -57,27 +72,47 @@ void manejador_SIGUSR1(int sig, siginfo_t *si, void *context) {
             printf("Proceso %d es el ganador\n", numero_hijo);
             exit(0);
         }
+        else{
+            union sigval value1;
+            value1.sival_int = 2;
+            if (sigqueue(getppid(), SIGUSR1, value1) == -1) {
+                perror("sigqueue");
+            }
+        }
     }
 }
 
-//Entradas:    Señal recibida (SIGUSR2), valor de la señal, informacion del proceso de la señal
-//Salidas:     No retorna nada
-//Descripcion: Maneja la señal SIGUSR2, actualiza la referencia del siguiente proceso
-//             Tambien maneja el cambio de lider de procesos
+// Entradas:    Señal recibida (sig) en este caso debe recibir SIGUSR2, (*si) puntero a la estructura que contiene 
+//              la informacion de la señal (en este caso se usa para enviar valores a traves de las señales) y (*context) 
+//              informacion del proceso de la señal (en este caso no se usa)
+//
+// Salidas:     No retorna nada
+//
+// Descripcion: Maneja la señal SIGUSR2, recibe un valor de la señal a traves del campo si_value de si, este valor es 
+//              interpretado como un entero con sival_int, este debe tener la forma (valor + manejador) de modo que el 
+//              numero menos significativo es el "manejador" que se usara y los demas es el valor que se usara.
+//
+//              Si el manejador es 1, el valor que recibe es el pid del proceso siguiente a el, el cual guarda en 
+//              proceso_siguiente.
+//
+//              Si el manejador es 2, el valor recibido es un nuevo proceso siguiente el cual debe guardar en
+//              proceso_siguiente y luego avisarle al padre que lo recibio.
+//
+//              Si el manejador es distinto de 1 y 2, significa que la señal recibida es del padre asignandolo como
+//              lider y el valor recibido es para que reinicie el token y continue el desafio.
+
 void manejador_SIGUSR2(int sig, siginfo_t *si, void *context){
     int valor_señal = si->si_value.sival_int;
     int manejador = valor_señal%10;
-    //printf("manejador = %d\n", manejador);
+    
     if(manejador == 1){ // Manejador siguiente proceso
         pid_t pid_proceso_sig = (valor_señal)/10;
-        // debug, comprobar si se forma el anillo
-        // printf("el proceso siguiente del proceso %d es el %d\n", getpid(), pid_proceso_sig);
         proceso_siguiente = pid_proceso_sig;
-        proceso_siguiente_recibido = 1;
     }
     else if(manejador == 2){
         pid_t pid_proceso_sig = (valor_señal)/10;
         proceso_siguiente = pid_proceso_sig;
+
         union sigval value;
         value.sival_int = 12;
         if (sigqueue(getppid(), SIGUSR1, value) == -1) {
@@ -94,9 +129,13 @@ void manejador_SIGUSR2(int sig, siginfo_t *si, void *context){
     }
 }
 
-//Entradas:    Cantidad de hijos a crear, mascara de señales, numero de procesos
-//Salidas:     Retorna un puntero a un arreglo de pids de los hijos creados
-//Descripcion: Crea los procesos hijos, cada uno espera las señales para operar
+// Entradas:    Cantidad de hijos a crear (cantidad), puntero a una mascara de señales (*oldmask) (debe ser una 
+//              mascara con las señales desbloqueadas) y numero de procesos (numero).
+//
+// Salidas:     Retorna un puntero a un arreglo de pids de los hijos creados.
+//
+// Descripcion: Crea los procesos hijos con fork(), cada uno se queda en un infinito ciclo esperando señales para operar.
+
 pid_t* crear_hijos(int cantidad,  sigset_t *oldmask, int numero) {
     pid_t *pids = malloc(cantidad * sizeof(pid_t));
     if (!pids) {
@@ -112,10 +151,7 @@ pid_t* crear_hijos(int cantidad,  sigset_t *oldmask, int numero) {
         } else if (pid == 0) {
             // Hijo
             numero_hijo = i + 1;
-            srand(getpid());
-            while(proceso_siguiente_recibido == 0){
-                sigsuspend(oldmask);
-            }
+            srand(time(NULL));
             while(1) {
                 sigsuspend(oldmask);
             }
@@ -127,10 +163,25 @@ pid_t* crear_hijos(int cantidad,  sigset_t *oldmask, int numero) {
     return pids;
 }
 
-//Entradas:    Pids de los hijos, cantidad de hijos, token inicial, mascara de señales, valor de la señal, valor de la señal 2
-//Salidas:     No retorna nada
-//Descripcion: Maneja el ciclo de vida de los hijos. Modifica los procesos y actualiza el arreglo de PIDs
-void manejar_hijos(pid_t *pids, int *hijos, int token, sigset_t *oldmask, union sigval value, union sigval value2){
+// Entradas:    Puntero al arreglo con los pids de los hijos (*pids), puntero al entero con la cantidad de hijos (*hijos), 
+//              token inicial (token), puntero a una mascara de señales (*oldmask) (con las señales desbloqueadas).
+//
+// Salidas:     No retorna nada
+//
+// Descripcion: Maneja el ciclo de vida de los hijos, el padre espera a que alguno de sus hijos termine, cuando uno termina
+//              este es desconectado del anillo de procesos y se le avisa al proceso anterior a el que debe cambiar su proceso
+//              siguiente, el padre espera a que este cambio sea efectivo y continua eliminando el pid del hijo terminado del
+//              arreglo de pids, luego le avisa a todos los procesos que termino hijo y les envia el numero de procesos restantes
+//              en el desafio, y asigna al proceso con el pid mas bajo que sea el lider y le envia la señal con el token para
+//              que continue el desafio reiniciando el token.
+
+void manejar_hijos(pid_t *pids, int *hijos, int token, sigset_t *oldmask){
+
+    // Valor para la señal SIGUSR1
+    union sigval value;
+    // Valor para la señal SIGUSR2
+    union sigval value2;
+
     while(*hijos > 1){
         pid_t pid_hijo_terminado = wait(NULL);
         // cuando uno de los procesos termina se desconecta del "anillo" de procesos
@@ -174,66 +225,78 @@ void manejar_hijos(pid_t *pids, int *hijos, int token, sigset_t *oldmask, union 
                 k++;
             }
         }
-        //free(pids);
+        pids = NULL;
         pids = pids_mod;
         (*hijos)--;
-        
-        /* da problemas
-        // Se notifica a los procesos que se elimino un proceso y se le envia la cantidad de procesos restantes
-        value.sival_int = (hijos*10);
-        for(int i = 0; i < hijos; i++){
-            if(sigqueue(pids[i], SIGUSR1, value) == -1){
+
+        // si hay mas de 1 hijo, se avisa a todos que uno termino y se continua el desafio asignando un lider
+        if(*hijos > 1){
+            // Se supone que por el enunciado debemos "avisar" a todos los hijos que se termino alguno
+            for(int i = 0; i < *hijos; i++){
+                value.sival_int = (*hijos * 10);
+                if (sigqueue(pids[i], SIGUSR1, value) == -1) {
+                perror("sigqueue");
+                }
+                // el padre espera la confirmacion de que le llego la señal al hijo
+                sigsuspend(oldmask);
+            }
+            // Mecanismo para asignar el lider (quien tiene el pid mas bajo)
+            int hijo_pid_mas_bajo = *hijos - 1;
+            for(int i = 0; i < *hijos; i++){
+                if(pids[hijo_pid_mas_bajo] > pids[i]){
+                    hijo_pid_mas_bajo = i;
+                }
+            }
+
+            // Se le envia la señal al lider para que continue con el desafio
+
+            value2.sival_int = (token * 10);
+            if (sigqueue(pids[hijo_pid_mas_bajo], SIGUSR2, value2) == -1) {
                 perror("sigqueue");
             }
         }
-            */
-
-        // Por ahora se elije al proceso que esta al principio del arreglo como el lider para reiniciar el desafio
-        /* value2.sival_int = (token*10) + 1;
-        // Deberia se SIGUSR2 pero da problemas
-        if(sigqueue(pids[0], SIGUSR1, value2) == -1){
+        // si hay menos de 2 hijos, se avisa al proceso que queda que termino uno
+        else{
+            value.sival_int = (*hijos * 10);
+            if (sigqueue(pids[0], SIGUSR1, value) == -1) {
             perror("sigqueue");
-        } */
-        // Si solo queda un proceso, notificamos al ganador
-
-        // Se supone que por el enunciado debemos "avisarle" a todos los hijos que se murio alguno
-        value.sival_int = (*hijos * 10);
-        if (sigqueue(pids[0], SIGUSR1, value) == -1) {
-           perror("sigqueue");
+            }
         }
-
-        value2.sival_int = (token * 10);
-        if (sigqueue(pids[0], SIGUSR2, value2) == -1) {
-            perror("sigqueue");
-        }
-        //printf("restantes = %d\n", hijos);
     }
 }
 
-//Entradas:    Pids de los hijos, token inicial, valor de la señal
-//Salidas:     No retorna nada
-//Descripcion: Envia el token inicial al primer hijo
-void enviar_token(pid_t *pids, int token, union sigval value){
+// Entradas:    Puntero al arreglo con los pids de los hijos (*pids), token inicial (token)
+//
+// Salidas:     No retorna nada
+//
+// Descripcion: Envia el token inicial al primer hijo
+
+void enviar_token(pid_t *pids, int token){
+    union sigval value;
     value.sival_int = (token*10) + 1;
     if (sigqueue(pids[0], SIGUSR1, value) == -1) {
         perror("sigqueue");
     }
 }
 
-//Entradas:    Pids de los hijos, cantidad de hijos, valor de la señal
-//Salidas:     No retorna nada
-//Descripcion: Conecta los hijos entre si, enviando la señal SIGUSR2
-void conectar_hijos(pid_t *pids, int hijos, union sigval value){
+// Entradas:    Puntero al arreglo con los pids de los hijos (*pids), cantidad de hijos (hijos)
+//
+// Salidas:     No retorna nada
+// 
+// Descripcion: Conecta los hijos entre si, enviando la señal SIGUSR2
+
+void conectar_hijos(pid_t *pids, int hijos){
+    union sigval value2;
     for (int i = 0; i < hijos; i++) {
         if(i == (hijos-1)){
-            value.sival_int = (pids[0]*10) + 1;
-            if (sigqueue(pids[i], SIGUSR2, value) == -1) {
+            value2.sival_int = (pids[0]*10) + 1;
+            if (sigqueue(pids[i], SIGUSR2, value2) == -1) {
                 perror("sigqueue");
             }
         }
         else{
-            value.sival_int = (pids[i+1]*10) + 1;
-            if (sigqueue(pids[i], SIGUSR2, value) == -1) {
+            value2.sival_int = (pids[i+1]*10) + 1;
+            if (sigqueue(pids[i], SIGUSR2, value2) == -1) {
                 perror("sigqueue");
             }
         }
@@ -245,6 +308,7 @@ void conectar_hijos(pid_t *pids, int hijos, union sigval value){
 int main(int argc, char *argv[]) {
     int opt;
     int token = -1, numero = -1, hijos = -1;
+    
     srand(time(NULL));
 
     while ((opt = getopt(argc, argv, "t:M:p:")) != -1) {
@@ -264,7 +328,7 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    //Validar que se entreguen todos los argumentos
+    // Validar que se entreguen todos los argumentos
     // Si alguno de los argumentos es -1, significa que no se ingresó
     // el argumento correspondiente
 
@@ -273,7 +337,7 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    //Validar tipo de argumentos
+    // Validar tipo de argumentos
     if (token < 0) {
         fprintf(stderr, "El token debe ser un número positivo.\n");
         exit(EXIT_FAILURE);
@@ -287,15 +351,13 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    //printf("Valores ingresados: t = %d, M = %d, p = %d\n", token, numero, hijos);
-
     max_decrecimiento = numero;
 
     struct sigaction sa;
     sigset_t mask, oldmask;
 
-    //Configuracion del manejador para SIGUSR1
-    sa.sa_flags = SA_SIGINFO; //Permite aceder a la informacion extendida
+    // Configuracion del manejador para SIGUSR1
+    sa.sa_flags = SA_SIGINFO; //Permite acceder a la informacion extendida
     sa.sa_sigaction = manejador_SIGUSR1; //Asigna el manejadro definido
     sigemptyset(&sa.sa_mask);
     if (sigaction(SIGUSR1, &sa, NULL) == -1) {
@@ -320,51 +382,20 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-
     //Llamamos a la función para crear los hijos
     pid_t *pids = crear_hijos(hijos, &oldmask, numero);
 
-    union sigval value;
-    union sigval value2;
-
-
     // Enviar token solo al primer proceso
-    enviar_token(pids, token, value);
-
-    /* union sigval value;
-    value.sival_int = (token*10) + 1;
-    if (sigqueue(pids[0], SIGUSR1, value) == -1) {
-        perror("sigqueue");
-    } */
-
-    //El padre conecta los procesos
-    conectar_hijos(pids, hijos, value2);
-
-    /* for (int i = 0; i < hijos; i++) {
-        if(i == (hijos-1)){
-            value2.sival_int = (pids[0]*10) + 1;
-            if (sigqueue(pids[i], SIGUSR2, value2) == -1) {
-                perror("sigqueue");
-            }
-        }
-        else{
-            value2.sival_int = (pids[i+1]*10) + 1;
-            if (sigqueue(pids[i], SIGUSR2, value2) == -1) {
-                perror("sigqueue");
-            }
-        }
-        
-    } */
+    enviar_token(pids, token);
 
 
-    manejar_hijos(pids, &hijos, token, &oldmask, value, value2);
+    // El padre conecta los procesos
+    conectar_hijos(pids, hijos);
 
-    /* // Espera que terminen
-    for (int i = 0; i < hijos; i++) {
-        waitpid(pids[i], NULL, 0);
-    }*/
 
-    
+    manejar_hijos(pids, &hijos, token, &oldmask);
+
+    // Luego de que deja de manejar a los hijos, el padre espera a que el proceso ganador termine
     wait(NULL);
     free(pids);
     return 0;
